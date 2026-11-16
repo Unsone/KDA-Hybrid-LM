@@ -1,0 +1,9 @@
+# Local development dependencies; install with --torch-backend cpu on this machine.
+torch==2.15.0
+numpy==2.4.6
+einops==0.8.2
+PyYAML==6.0.3
+tqdm==4.70.1
+matplotlib==3.11.2
+pytest==9.2.0
+ipykernel==7.4.0
