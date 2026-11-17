@@ -1,6 +1,6 @@
 # Linux 服务器：从 clone 到训练
 
-需要 Python 3.11 或 3.12（含 venv/pip）、Git、Bash。GPU 实验需要可被 `nvidia-smi` 识别的 NVIDIA 显卡和兼容驱动；安装脚本不修改驱动、不使用 sudo。
+需要 Git、Bash，以及 Python 3.11/3.12（含 venv/pip）或 Conda。安装器优先复用项目环境、寻找合适的 Python；若系统 Python 版本不合适且存在 Conda，会自动在项目 `.venv` 创建 Python 3.11，不改变 Conda base。GPU 实验需要可被 `nvidia-smi` 识别的 NVIDIA 显卡和兼容驱动；安装脚本不修改驱动、不使用 sudo。
 
 ```bash
 git clone https://github.com/Unsone/KDA-Hybrid-LM.git
@@ -9,7 +9,7 @@ bash scripts/setup_linux.sh
 bash start_training.sh smoke
 ```
 
-安装器创建项目内 `.venv`，安装 PyTorch **2.9.1 / CUDA 12.6** 和固定的 Linux 训练依赖，安装当前项目，并执行依赖检查及 CUDA 矩阵乘法检查。默认不读取 Windows 本机的 `requirements.txt`，项目安装元数据也不再要求该文件中本机的 PyTorch 版本。
+安装器创建项目内 `.venv`（venv 或 Conda prefix），安装 PyTorch **2.9.1 / CUDA 12.6** 和固定的 Linux 训练依赖，安装当前项目，并执行依赖检查及 CUDA 矩阵乘法检查。Conda 自动创建时显式使用 conda-forge。默认不读取 Windows 本机的 `requirements.txt`，项目安装元数据也不再要求该文件中本机的 PyTorch 版本。
 
 `smoke` 使用内置合成句子快速验证三种优化器、搜索、复验、检查点和绘图，不下载语料，也不是正式结果。安装和启动均无需手动激活虚拟环境。
 
@@ -21,13 +21,15 @@ bash start_training.sh smoke
 PYTHON=python3.11 bash scripts/setup_linux.sh
 ```
 
-若服务器没有合适的 Python，也可以先用已有 Conda 安装创建环境，再运行安装器：
+在 `(base)` 中无需手动创建环境，直接运行安装器即可；若希望自己管理 Python，也可以先执行：
 
 ```bash
 conda create -n kda-python python=3.11 -y
 conda activate kda-python
 bash scripts/setup_linux.sh
 ```
+
+显式设置了 `PYTHON` 时，脚本会遵循该选择，版本不合适则给出提示。已有 `.venv` 的 Python 版本不合适时，不会删除或覆盖，需指定新的 `VENV_DIR`。
 
 对于 RTX 50 系列等需要较新 CUDA wheel 的设备，可以选择 CUDA 12.8：
 
@@ -106,6 +108,7 @@ tail -f outputs/logs/adam-comparison.log
 
 ```bash
 .venv/bin/python -m pytest tests -q
+bash tests/shell/test_setup_linux.sh
 ```
 
 本地已验证 CPU 流程、BPE 小样本和 Bash 语法/参数转发；完整 Linux 安装及 GPU 长训练需要在目标服务器验收，不把本机验证等同于服务器验证。
