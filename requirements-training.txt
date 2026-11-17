@@ -1,0 +1,2 @@
+# Install in the same environment as PyTorch; base dependencies are in requirements.txt.
+tokenizers>=0.20,<0.23

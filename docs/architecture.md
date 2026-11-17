@@ -2,7 +2,7 @@
 
 ## 当前边界
 
-已实现内容集中在 `mixers/` 和 `modules/`；训练器、任务、完整模型、配置加载以及 kernels 仍为占位。目录存在不等于功能可运行。
+已实现 `mixers/`、`modules/` 与 `models/`：完整 LM、损失、混合缓存及贪心生成已可运行。最小 LM 训练、三种 Adam 步长分配、文本预处理与绘图已接入，见 [启动指南](launch_training.md)。完整 MQAR 管线、配置文件加载以及 kernels 仍待实现。模型接口与初始化见 [模型实验准备](model_optimizer_experiment.md)。目录存在不等于功能可运行。
 
 ## Mixer 接口
 
@@ -40,18 +40,18 @@ Dropout 位置不同：SoftmaxAttention 在注意力权重上应用；四种递�
 
 短卷积 state 是卷积前历史输入 `[B,C,K-1]`，不是卷积输出。K=1 时缓存长度为零。RoPE 的 offset 是片段首位置；应只旋转新 Q/K，然后再追加新 K 到缓存，不能每步重转已有 K。
 
-## 计划中的模型块
+## 模型块
 
 ```text
 x → RMSNorm → Mixer → 与 x 残差相加
   → RMSNorm → SwiGLU → 与该分支输入残差相加
 ```
 
-目前尚未组装该 Block。位置编码、短卷积和残差分支 Dropout 的启用方式，将在集成阶段明确配置，不能因组件已经实现就默认网络已使用它们。
+HybridBlock 已组装。全注意力在模型内默认启用 RoPE；递推层不使用 RoPE，短卷积仍未接入。MLP 使用自身输出 Dropout，Mixer 使用各自定义的 Dropout，Block 不额外添加残差 Dropout。
 
-全模型计划为 Embedding → 多个 Block → 最终 Norm → 输出头。3:1 混合表示每三层线性 Mixer 接一层全注意力；各层持有自己的状态。后续 `models/state.py` 管理复合状态，包括 KV/矩阵记忆、卷积历史和位置偏移。
+全模型为 Embedding → 多个 Block → 最终 Norm → 输出头。3:1 混合表示每三层线性 Mixer 接一层全注意力；各层持有自己的状态。`models/state.py` 管理按层的 KV/矩阵缓存及 tokens_seen；RoPE 的 offset 由各全注意力层的 KV 长度确定，尚无卷积历史。
 
-## 训练全链路与文件职责（待实现）
+## 训练全链路与文件职责
 
 ```text
 scripts/train_*.py

@@ -3,14 +3,17 @@ import math
 import torch
 
 from .base import TokenMixer
+from kda_hybrid_lm.modules import RotaryEmbedding
 
 
 class SoftmaxAttention(TokenMixer):
     """多头因果自注意力；输入输出为 [B, T, C]，缓存为 [B, H, S, D]。"""
 
-    def __init__(self, hidden_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = False):
+    def __init__(self, hidden_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = False,
+                 rope: bool = False, rope_base: float = 10000.0):
         super().__init__(hidden_dim, num_heads, dropout, bias)
         self.scale = 1 / math.sqrt(self.head_dim)
+        self.rotary = RotaryEmbedding(self.head_dim, rope_base) if rope else None
 
     def forward(self, x, state=None, use_cache=False):
         # Compute Q, K, V
@@ -25,6 +28,9 @@ class SoftmaxAttention(TokenMixer):
         past_len = 0
         if state is not None:
             past_len = state[0].size(2)
+        if self.rotary is not None:
+            q, k = self.rotary(q, k, offset=past_len)
+        if state is not None:
             k = torch.cat((state[0], k), dim=2)
             v = torch.cat((state[1], v), dim=2)
 

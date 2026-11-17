@@ -2,7 +2,7 @@
 
 ## 已验证的本机环境
 
-Windows / PowerShell，Python 3.11.15，uv，项目内 `.venv`，PyTorch 2.15.0+cpu。直接依赖版本见 [requirements.txt](../requirements.txt)，pyproject.toml 从该文件读取依赖。2026-11-16 全量组件测试 21 项通过；依赖兼容性也可用下面命令检查。
+Windows / PowerShell，Python 3.11.15，uv，项目内 `.venv`，PyTorch 2.15.0+cpu。本机直接依赖版本见 [requirements.txt](../requirements.txt)；项目安装元数据使用可移植的依赖范围，不再绑定本机 CPU 环境。2026-11-17 全量测试 35 项通过；依赖兼容性也可用下面命令检查。
 
 本机负责开发、CPU 数值测试、绘图和文档，远程 GPU 负责正式训练及高效内核实验。当前没有配置本机 CUDA/ROCm，也没有正式 GPU 训练结果。
 
@@ -32,9 +32,11 @@ uv pip check --python .venv\Scripts\python.exe
 .\.venv\Scripts\python.exe -m pytest tests/unit/test_norm.py tests/unit/test_modules.py -q
 ```
 
-CPU 环境 CUDA=False 正常。main.py 目前仅输出 Hello，训练脚本与 YAML 配置为空；不要把执行空脚本成功视为训练成功。编辑器选择 `.venv/Scripts/python.exe`；已安装 ipykernel，可直接选择该环境作为 Notebook 内核。
+CPU 环境 CUDA=False 正常。main.py 目前仅输出 Hello；LM 训练和文本预处理脚本已可运行，YAML 配置仍为空。启动方式见 [训练指南](launch_training.md)。编辑器选择 `.venv/Scripts/python.exe`；已安装 ipykernel，可直接选择该环境作为 Notebook 内核。
 
 ## 远程 GPU / Kaggle
+
+Linux 服务器使用 [独立安装与启动脚本](linux_server.md)：`bash scripts/setup_linux.sh`，然后 `bash start_training.sh smoke`。默认 PyTorch 2.9.1 / cu126，普通依赖见 `requirements-linux.txt`；可选 CUDA 12.8 通道或复用已有环境。
 
 不要复制本机 .venv。将源代码和固定版本配置传到目标环境，先记录 Python、PyTorch、驱动、GPU 型号、显存、计算能力和实际精度支持，再决定依赖与后端；不要在 Notebook 中无条件覆盖整套预装 PyTorch。
 
