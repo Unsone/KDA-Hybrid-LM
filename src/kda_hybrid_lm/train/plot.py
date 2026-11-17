@@ -53,4 +53,23 @@ def plot_results(results, output):
         fig.tight_layout()
         fig.savefig(output / f"{name}.png", dpi=120)
         plt.close(fig)
+        # 老版本 CSV 仍可绘制原有的三项指标。
+        optimizer_runs = [run for run in runs if "grad_rms" in run[2][0]]
+        if optimizer_runs:
+            keys = ["grad_rms", "momentum_rms", "momentum_hat_rms",
+                    "sqrt_second_moment_hat_rms", "adam_direction_rms"]
+            fig, axes = plt.subplots(len(keys), 1, figsize=(9, 11), sharex=True)
+            for label, color, entries in optimizer_runs:
+                steps = [int(row["step"]) for row in entries]
+                for axis, key in zip(axes, keys):
+                    axis.plot(steps, [float(row[key]) for row in entries],
+                              label=label, color=color, alpha=0.7)
+                    axis.set_ylabel(key, fontsize=8)
+                    axis.grid(alpha=0.2)
+            axes[0].set_title(name)
+            axes[0].legend(fontsize=7)
+            axes[-1].set_xlabel("Optimizer step")
+            fig.tight_layout()
+            fig.savefig(output / f"{name}_optimizer.png", dpi=120)
+            plt.close(fig)
     print(f"Figures: {output}", flush=True)

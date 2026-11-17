@@ -2,7 +2,7 @@
 
 ## 已验证的本机环境
 
-Windows / PowerShell，Python 3.11.15，uv，项目内 `.venv`，PyTorch 2.15.0+cpu。本机直接依赖版本见 [requirements.txt](../requirements.txt)；项目安装元数据使用可移植的依赖范围，不再绑定本机 CPU 环境。2026-11-17 全量测试 35 项通过；依赖兼容性也可用下面命令检查。
+Windows / PowerShell，Python 3.11.15，uv，项目内 `.venv`，PyTorch 2.15.0+cpu。本机直接依赖版本见 [requirements.txt](../requirements.txt)；项目安装元数据使用可移植的依赖范围，不再绑定本机 CPU 环境。2026-11-17 全量测试 39 项通过；依赖兼容性也可用下面命令检查。
 
 本机负责开发、CPU 数值测试、绘图和文档，远程 GPU 负责正式训练及高效内核实验。当前没有配置本机 CUDA/ROCm，也没有正式 GPU 训练结果。
 

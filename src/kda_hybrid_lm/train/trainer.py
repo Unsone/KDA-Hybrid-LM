@@ -54,12 +54,23 @@ def evaluate(model, data, length, batch_size, max_batches):
 
 
 class WeightTrace:
-    def __init__(self, model, path):
-        self.weights = {n: p for n, p in model.named_parameters() if n.endswith(".weight")}
+    """每个可训练参数张量一行；step=t 对应第 t 次更新后的权重和矩。"""
+
+    def __init__(self, model, optimizer, path):
+        self.weights = {n: p for n, p in model.named_parameters() if p.requires_grad}
+        self.optimizer = optimizer
+        self.groups = {id(p): group for group in optimizer.param_groups for p in group["params"]}
         self.initial = torch.stack([p.detach().float().norm() for p in self.weights.values()])
         self.file = Path(path).open("w", newline="", encoding="utf-8")
         self.writer = csv.writer(self.file)
-        self.writer.writerow(["step", "parameter", "norm", "norm_ratio", "relative_update", "rms"])
+        self.writer.writerow([
+            "step", "parameter", "numel", "parameter_step", "has_grad",
+            "norm", "norm_ratio", "relative_update", "rms", "pre_norm", "update_norm",
+            "grad_norm", "grad_rms", "momentum_norm", "momentum_rms",
+            "momentum_hat_norm", "momentum_hat_rms", "second_moment_norm",
+            "second_moment_rms", "second_moment_hat_norm", "sqrt_second_moment_hat_rms",
+            "adam_direction_norm", "adam_direction_rms", "effective_lr",
+        ])
         self.write(0)
 
     def snapshot(self):
@@ -69,15 +80,47 @@ class WeightTrace:
     def write(self, step, before=None):
         norms = torch.stack([p.detach().float().norm() for p in self.weights.values()])
         ratio = torch.where(self.initial > 0, norms / self.initial, float("nan"))
-        relative = torch.full_like(norms, float("nan"))
+        previous = delta = relative = torch.full_like(norms, float("nan"))
         if before is not None:
             previous = torch.stack([p.norm() for p in before])
             delta = torch.stack([(p.detach().float() - old).norm()
                                  for p, old in zip(self.weights.values(), before)])
             relative = torch.where(previous > 0, delta / previous, float("nan"))
-        values = torch.stack((norms, ratio, relative), dim=1).cpu().tolist()
-        for (name, p), (norm, scale, update) in zip(self.weights.items(), values):
-            self.writer.writerow([step, name, norm, scale, update, norm / math.sqrt(p.numel())])
+        rows = []
+        parameter_steps = []
+        for i, p in enumerate(self.weights.values()):
+            group = self.groups[id(p)]
+            state = self.optimizer.state.get(p, {})
+            t = int(state["step"].item()) if state else 0
+            parameter_steps.append(t)
+            root_n = math.sqrt(p.numel())
+            zero = norms.new_zeros(())
+            nan = norms.new_full((), float("nan"))
+            grad = p.grad.detach().float().norm() if p.grad is not None else nan
+            m_norm = v_norm = zero
+            m_hat_norm = v_hat_norm = denominator_rms = direction_norm = nan
+            if t:
+                beta1, beta2 = group["betas"]
+                m, v = state["exp_avg"].float(), state["exp_avg_sq"].float()
+                m_hat = m / (1 - beta1 ** t)
+                v_hat = v / (1 - beta2 ** t)
+                m_norm, v_norm = m.norm(), v.norm()
+                m_hat_norm, v_hat_norm = m_hat.norm(), v_hat.norm()
+                denominator_rms = v_hat.mean().sqrt()
+                if p.grad is not None:
+                    direction_norm = (m_hat / (v_hat.sqrt() + group["eps"])).norm()
+            rows.append(torch.stack([
+                norms[i], ratio[i], relative[i], norms[i] / root_n, previous[i], delta[i],
+                grad, grad / root_n, m_norm, m_norm / root_n,
+                m_hat_norm, m_hat_norm / root_n, v_norm, v_norm / root_n,
+                v_hat_norm, denominator_rms, direction_norm, direction_norm / root_n,
+            ]))
+        # 批量搬到 CPU，避免对每个统计量单独触发 GPU 同步。
+        values = torch.stack(rows).cpu().tolist()
+        for (name, p), t, row in zip(self.weights.items(), parameter_steps, values):
+            self.writer.writerow([step, name, p.numel(), t, int(p.grad is not None),
+                                  *row, self.groups[id(p)]["lr"]])
+        self.file.flush()
 
     def close(self):
         self.file.close()
@@ -104,7 +147,7 @@ def run_training(config, train, valid, output_dir, *, kind, lr, seed, shuffle_se
                     trace_every=trace_every, weight_decay=0,
                     data_order_seed=seed + 100000)
     (output_dir / "config.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    trace = WeightTrace(model, output_dir / "weights.csv")
+    trace = WeightTrace(model, optimizer, output_dir / "weights.csv")
     start_time = time.perf_counter()
     tokens = 0
     try:

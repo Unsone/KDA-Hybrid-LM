@@ -74,7 +74,7 @@ python scripts/train_lm.py --mode compare --device cuda
 | 复验 | 每臂 seed 42、43、44，各 6104 步，约 5000 万 token |
 | 验证 | 每 100 步及末步，固定前缀最多 65536 个目标 token |
 | 优化 | FP32，恒定 LR，Adam betas=(0.9,0.999)，eps=1e-8，无 weight decay 或梯度裁剪 |
-| 权重统计 | step=0 以及每一步；更新幅度以更新前范数为分母 |
+| 参数统计 | step=0 以及每一步；所有可训练张量（含 bias），记录权重、梯度、Adam 矩和更新方向；更新幅度以更新前范数为分母 |
 
 每臂按搜索末步的 validation NLL 单独选 LR；各候选使用相同预算。复验 seed 与 tune seed 不重叠；shuffled 排列 seed=`shuffle_seed + training_seed`。记录失败的非有限损失候选，OOM 和其它运行错误直接退出，便于用户统一调整 microbatch。最终 test 只在搜索和训练完成后评估，不用于选择 LR。
 
@@ -93,8 +93,10 @@ python scripts/train_lm.py --mode compare --device cuda
 - `launch.json`、`data-metadata.json`、`source/`：运行参数、真实数据标识与实际运行的源码快照。
 - `search.json`、`selected_lrs.json`：全部搜索结果及每臂选出的 LR；发散候选保留 `failure.json`。
 - `repeat/<optimizer>-seed<seed>/config.json`：初始化哈希、原始 RMS、实际 s、尺度来源和随机种子。
-- 各运行的 `metrics.jsonl`、`weights.csv`、`last.pt`：逐步损失与验证、逐权重三项指标/RMS、最终模型与优化器状态。
+- 各运行的 `metrics.jsonl`、`weights.csv`、`last.pt`：逐步损失与验证、逐参数的权重/梯度/Adam 矩/实际更新统计、最终模型与优化器状态。
 - `summary.json`：全部复验的 validation/test NLL、PPL、实际 token 预算与包含验证/统计的吞吐率。保留每个 seed，不只输出平均值。
-- `figures/loss.png` 及每个权重名称的 PNG：损失和逐张量范数、相对初值、单步相对更新曲线。
+- `figures/loss.png`、`<参数名>.png`、`<参数名>_optimizer.png`：损失、逐张量权重变化，以及梯度/一二阶矩/自适应方向的 RMS 曲线。
 
 `norm` 指展平后的欧氏范数，不是矩阵谱范数；step=0 的相对更新以及零分母比值写为 NaN。`.weight`（包括 Norm）参与缩放和非零尺度排列，bias 不缩放；零初始化权重的 Adam-S 学习率为零。模型快照可加载，但完整的中断续跑尚未接入。
+
+日志从 step=0 开始，默认 `--trace-every 1` 每次优化器更新都记录；每一步写完会 flush，运行中也可查看 CSV。所有统计均以参数张量为单位，不保存每个元素的完整历史。详细字段和更新前后对齐见 [参数诊断记录](parameter_diagnostics.md)。旧日志没有梯度或动量历史，更新代码后仅新运行产生新增字段；绘图仍兼容旧版 CSV。
