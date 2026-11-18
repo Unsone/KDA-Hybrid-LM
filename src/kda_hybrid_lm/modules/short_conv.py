@@ -21,7 +21,9 @@ class ShortConvolution(nn.Module):
         if state is None:
             state = values.new_zeros(batch, dim, self.kernel_size - 1)
         values = torch.cat((state, values), dim=2)
-        output = F.silu(self.conv(values)).transpose(1, 2)
+        convolved = self.conv(values)
+        activated = F.silu(convolved)
+        output = activated.transpose(1, 2)
 
         new_state = None
         if use_cache:

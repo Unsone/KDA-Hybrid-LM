@@ -25,61 +25,103 @@ class HybridLM(nn.Module):
         super().__init__()
         self.config = config
         self.embedding = nn.Embedding(config.vocab_size, config.hidden_dim)
-        mixer_classes = dict(zip(
-            ("softmax", "linear", "delta", "gdn", "kda"),
-            (SoftmaxAttention, LinearAttention, DeltaNet, GatedDeltaNet, KDA),
-        ))
         self.layers = nn.ModuleList()
         for kind in config.layer_types:
-            kwargs = {"rope": config.rope, "rope_base": config.rope_base} if kind == "softmax" else {}
-            mixer = mixer_classes[kind](
-                config.hidden_dim, config.num_heads, config.dropout, config.bias, **kwargs,
-            )
-            self.layers.append(HybridBlock(
-                config.hidden_dim, config.intermediate_dim, mixer, config.dropout, config.bias,
-            ))
+            layer = self._build_layer(kind)
+            self.layers.append(layer)
         self.norm = RMSNorm(config.hidden_dim)
         self.lm_head = nn.Linear(config.hidden_dim, config.vocab_size, bias=False)
         self.apply(self._init_weights)
         if config.tie_embeddings:
             self.lm_head.weight = self.embedding.weight
 
+    def _build_layer(self, kind):
+        """为这一层选择 Mixer，再与 Norm、MLP 和残差组成 Block。"""
+        config = self.config
+        mixer_classes = {
+            "softmax": SoftmaxAttention,
+            "linear": LinearAttention,
+            "delta": DeltaNet,
+            "gdn": GatedDeltaNet,
+            "kda": KDA,
+        }
+        mixer_options = {}
+        if kind == "softmax":
+            mixer_options["rope"] = config.rope
+            mixer_options["rope_base"] = config.rope_base
+        mixer_class = mixer_classes[kind]
+        mixer = mixer_class(
+            config.hidden_dim,
+            config.num_heads,
+            config.dropout,
+            config.bias,
+            **mixer_options,
+        )
+        return HybridBlock(
+            config.hidden_dim,
+            config.intermediate_dim,
+            mixer,
+            config.dropout,
+            config.bias,
+        )
+
     def _init_weights(self, module):
-        # Linear 保留 PyTorch 的 fan-in 初始化，使不同形状有不同初始尺度。
+        # 保留初始化顺序和分布，避免改变已经运行的配对实验。
         if isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, std=self.config.embedding_std)
         elif isinstance(module, nn.Linear) and module.bias is not None:
             nn.init.zeros_(module.bias)
 
+    def _forward_layers(self, x, state, use_cache):
+        """每层读取自己的旧状态，按相同顺序收集新状态。"""
+        new_states = []
+        for index, layer in enumerate(self.layers):
+            previous_state = None
+            if state is not None:
+                previous_state = state.layers[index]
+            x, layer_state = layer(x, previous_state, use_cache)
+            if use_cache:
+                new_states.append(layer_state)
+        return x, new_states
+
+    def _compute_loss(self, logits, labels, shift_labels, ignore_index):
+        if labels is None:
+            return None
+        if shift_labels:
+            predictions = logits[:, :-1]
+            targets = labels[:, 1:]
+        else:
+            predictions = logits
+            targets = labels
+
+        # 保持原来的空目标处理：返回仍与计算图相连的零。
+        if (targets != ignore_index).any():
+            predictions = predictions.float()
+            predictions = predictions.reshape(-1, self.config.vocab_size)
+            targets = targets.reshape(-1)
+            return F.cross_entropy(predictions, targets, ignore_index=ignore_index)
+        return logits.sum() * 0
+
     def forward(self, input_ids, labels=None, state=None, use_cache=False,
                 shift_labels=True, ignore_index=-100):
-        """默认 labels 与输入同位置，内部移位一次预测下一 token。
+        """默认将 labels 移位一次预测下一 token；MQAR 用 shift_labels=False。
 
-        MQAR 或已移位的目标用 shift_labels=False；无 padding mask，文本需预先打包。
-        训练批次通常不传 state；缓存不会自动截断梯度。
+        无 padding mask，文本需预先打包；缓存不会自动截断梯度。
         """
         if state is not None and len(state.layers) != len(self.layers):
             raise ValueError("Cache layer count does not match model")
+
         x = self.embedding(input_ids)
-        new_states = []
-        for i, layer in enumerate(self.layers):
-            x, layer_state = layer(x, None if state is None else state.layers[i], use_cache)
-            if use_cache:
-                new_states.append(layer_state)
-        logits = self.lm_head(self.norm(x))
-        loss = None
-        if labels is not None:
-            predictions, targets = (logits[:, :-1], labels[:, 1:]) if shift_labels else (logits, labels)
-            # 全部忽略（或 T=1 移位后为空）时返回可反传的零，避免 NaN。
-            if (targets != ignore_index).any():
-                loss = F.cross_entropy(
-                    predictions.float().reshape(-1, self.config.vocab_size),
-                    targets.reshape(-1), ignore_index=ignore_index,
-                )
-            else:
-                loss = logits.sum() * 0
+        x, new_states = self._forward_layers(x, state, use_cache)
+        normalized = self.norm(x)
+        logits = self.lm_head(normalized)
+        loss = self._compute_loss(logits, labels, shift_labels, ignore_index)
+
         new_state = None
         if use_cache:
-            tokens_seen = (0 if state is None else state.tokens_seen) + input_ids.size(1)
+            previous_tokens = 0
+            if state is not None:
+                previous_tokens = state.tokens_seen
+            tokens_seen = previous_tokens + input_ids.size(1)
             new_state = ModelState(tuple(new_states), tokens_seen)
         return LMOutput(logits, loss, new_state)

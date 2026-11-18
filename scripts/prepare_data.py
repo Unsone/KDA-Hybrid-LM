@@ -39,7 +39,10 @@ def download(name, directory, revision):
         print(f"Downloading {url}", flush=True)
         temporary = path.with_suffix(".part")
         with urlopen(url, timeout=120) as source, temporary.open("wb") as target:
-            while block := source.read(4 * 1024 * 1024):
+            while True:
+                block = source.read(4 * 1024 * 1024)
+                if not block:
+                    break
                 target.write(block)
         temporary.replace(path)
     return path
@@ -108,10 +111,13 @@ def main():
         if key in seen:
             continue
         seen.add(key)
-        split = "validation" if key[0] % 2 == 0 else "test"
+        split = "test"
+        if key[0] % 2 == 0:
+            split = "validation"
         remaining = args.heldout_tokens - len(buffers[split])
         if remaining > 0:
-            buffers[split].extend((tokenizer.encode(text).ids + [eos])[:remaining])
+            ids = tokenizer.encode(text).ids + [eos]
+            buffers[split].extend(ids[:remaining])
     if min(map(len, buffers.values())) < 2:
         raise ValueError("Empty or too-short split; supply more distinct stories")
     args.output.mkdir(parents=True)

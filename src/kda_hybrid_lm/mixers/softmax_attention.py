@@ -13,15 +13,20 @@ class SoftmaxAttention(TokenMixer):
                  rope: bool = False, rope_base: float = 10000.0):
         super().__init__(hidden_dim, num_heads, dropout, bias)
         self.scale = 1 / math.sqrt(self.head_dim)
-        self.rotary = RotaryEmbedding(self.head_dim, rope_base) if rope else None
+        self.rotary = None
+        if rope:
+            self.rotary = RotaryEmbedding(self.head_dim, rope_base)
 
     def forward(self, x, state=None, use_cache=False):
         # Compute Q, K, V
         batch, length, dim = x.shape
         # self.q_proj(x) equals to x@self.q_proj.weight.T+self.q_proj.bias.
-        q = self._split_heads(self.q_proj(x), batch, length)
-        k = self._split_heads(self.k_proj(x), batch, length)
-        v = self._split_heads(self.v_proj(x), batch, length)
+        q_projected = self.q_proj(x)
+        q = self._split_heads(q_projected, batch, length)
+        k_projected = self.k_proj(x)
+        k = self._split_heads(k_projected, batch, length)
+        v_projected = self.v_proj(x)
+        v = self._split_heads(v_projected, batch, length)
 
         # Get new KVCache, using torch.cat in dim=2, which means tokens are appended.
         # state[0] is Kcache, whose shape is [B, H, T, D].
@@ -35,11 +40,15 @@ class SoftmaxAttention(TokenMixer):
             v = torch.cat((state[1], v), dim=2)
 
         # Compute ATTENTION scores.
-        scores = torch.matmul(q.float(), k.float().transpose(2, 3)) * self.scale
+        keys_transposed = k.float().transpose(2, 3)
+        scores = torch.matmul(q.float(), keys_transposed)
+        scores = scores * self.scale
 
         # Build the CASUAL MASK to prevent attending to future tokens.
-        query_pos = past_len + torch.arange(length, device=x.device).reshape(length, 1)
-        key_pos = torch.arange(k.size(2), device=x.device).reshape(1, k.size(2))
+        query_pos = torch.arange(length, device=x.device)
+        query_pos = past_len + query_pos.reshape(length, 1)
+        key_pos = torch.arange(k.size(2), device=x.device)
+        key_pos = key_pos.reshape(1, k.size(2))
         future_mask = key_pos > query_pos
         scores = scores.masked_fill(future_mask, float("-inf"))
 
@@ -48,10 +57,12 @@ class SoftmaxAttention(TokenMixer):
         weights = torch.softmax(scores, dim=3)
         # turn type if weights to v's type.
         # dropout means set random elements to 0 with a probability of 'dropout'.
-        weights = self.dropout(weights.to(v.dtype))
+        weights = weights.to(v.dtype)
+        weights = self.dropout(weights)
         # Compute and Reshape the output.
         output = torch.matmul(weights, v)
-        output = output.transpose(1, 2).reshape(batch, length, dim)
+        output = output.transpose(1, 2)
+        output = output.reshape(batch, length, dim)
         # Make a Linear Projection using W_o.
         output = self.out_proj(output)
 

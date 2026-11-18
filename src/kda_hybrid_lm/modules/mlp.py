@@ -23,7 +23,13 @@ class SwiGLU(nn.Module):
     本模块只做逐 token 变换、不混合序列；残差和归一化在 block 层组合时添加。
     """
 
-    def __init__(self, hidden_dim: int, intermediate_dim: int, dropout: float = 0.0, bias: bool = False):
+    def __init__(
+        self,
+        hidden_dim: int,
+        intermediate_dim: int,
+        dropout: float = 0.0,
+        bias: bool = False,
+    ):
         super().__init__()
         # gate_proj：C -> I，产出门控分数（silu 之前）
         self.gate_proj = nn.Linear(hidden_dim, intermediate_dim, bias=bias)
@@ -38,9 +44,11 @@ class SwiGLU(nn.Module):
         # x: [B, T, C]；nn.Linear 只作用最后一维，等价于 B*T 个 C 维向量各过一次 MLP。
         # 门控分支：先做线性投影，再套 silu(z) = z * sigmoid(z)：
         # z 越大越接近"按原样放行"，z 很负时输出接近 0 但仍保留小的负值。
-        gate = F.silu(self.gate_proj(x))  # [B, T, I]
+        gate_logits = self.gate_proj(x)
+        gate = F.silu(gate_logits)  # [B, T, I]
         # 值分支：只做线性，不加激活
         values = self.up_proj(x)  # [B, T, I]
         # 逐通道相乘：gate 是缩放系数、values 是内容；再投影回 C 维
-        output = self.down_proj(gate * values)  # [B, T, C]
+        gated_values = gate * values
+        output = self.down_proj(gated_values)  # [B, T, C]
         return self.dropout(output)

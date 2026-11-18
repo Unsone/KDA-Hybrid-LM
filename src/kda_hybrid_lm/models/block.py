@@ -8,8 +8,14 @@ class HybridBlock(nn.Module):
     其输入、输出均为 [B, L, D]。
     """
 
-    def __init__(self, hidden_dim: int, intermediate_dim: int, mixer: TokenMixer,
-                 dropout: float = 0.0, bias: bool = False):
+    def __init__(
+        self,
+        hidden_dim: int,
+        intermediate_dim: int,
+        mixer: TokenMixer,
+        dropout: float = 0.0,
+        bias: bool = False,
+    ):
         super().__init__()
         self.mixer = mixer
         self.mixer_norm = RMSNorm(hidden_dim)
@@ -22,7 +28,10 @@ class HybridBlock(nn.Module):
         state: 对应 Mixer 的 KV 元组、矩阵记忆，或 None
         use_cache: bool
         """
-        mixed, new_state = self.mixer(self.mixer_norm(x), state, use_cache)
+        normalized = self.mixer_norm(x)
+        mixed, new_state = self.mixer(normalized, state, use_cache)
         x = x + mixed
-        x = x + self.mlp(self.mlp_norm(x))
+        normalized = self.mlp_norm(x)
+        mlp_output = self.mlp(normalized)
+        x = x + mlp_output
         return x, new_state

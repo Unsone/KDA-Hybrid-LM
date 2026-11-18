@@ -21,13 +21,16 @@ class ModelConfig:
 
     def __post_init__(self):
         object.__setattr__(self, "layer_types", tuple(self.layer_types))
-        if min(self.vocab_size, self.hidden_dim, self.intermediate_dim, self.num_heads) <= 0:
+        dimensions = (self.vocab_size, self.hidden_dim, self.intermediate_dim, self.num_heads)
+        if min(dimensions) <= 0:
             raise ValueError("Model dimensions must be positive")
         if self.hidden_dim % self.num_heads:
             raise ValueError("hidden_dim must be divisible by num_heads")
         if not self.layer_types or any(t not in MIXER_TYPES for t in self.layer_types):
             raise ValueError(f"layer_types must contain names from {MIXER_TYPES}")
-        if self.rope and "softmax" in self.layer_types and (self.hidden_dim // self.num_heads) % 2:
+        uses_rotary_attention = self.rope and "softmax" in self.layer_types
+        head_dim = self.hidden_dim // self.num_heads
+        if uses_rotary_attention and head_dim % 2:
             raise ValueError("RoPE requires an even head_dim")
         if not 0 <= self.dropout < 1 or self.embedding_std <= 0 or self.rope_base <= 0:
             raise ValueError("Invalid dropout, embedding_std or rope_base")

@@ -27,8 +27,13 @@ class RotaryEmbedding(nn.Module):
     def forward(self, q, k, offset: int = 0):
         length = q.size(2)
         positions = torch.arange(offset, offset + length, device=q.device, dtype=torch.float32)
-        inverse_frequency = self.base ** (-self.frequency_indices.float() / self.head_dim)
-        angles = positions.reshape(1, 1, length, 1) * inverse_frequency.reshape(1, 1, 1, self.head_dim // 2)
+        exponent = -self.frequency_indices.float() / self.head_dim
+        inverse_frequency = self.base ** exponent
+        positions = positions.reshape(1, 1, length, 1)
+        inverse_frequency = inverse_frequency.reshape(1, 1, 1, self.head_dim // 2)
+        angles = positions * inverse_frequency
         cos = torch.cos(angles)
         sin = torch.sin(angles)
-        return self._rotate(q, cos, sin), self._rotate(k, cos, sin)
+        rotated_q = self._rotate(q, cos, sin)
+        rotated_k = self._rotate(k, cos, sin)
+        return rotated_q, rotated_k

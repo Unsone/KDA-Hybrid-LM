@@ -13,9 +13,12 @@ class LinearAttention(TokenMixer):
 
     def forward(self, x, state=None, use_cache=False):
         batch, length, dim = x.shape
-        q = self._split_heads(self.q_proj(x), batch, length)
-        k = self._split_heads(self.k_proj(x), batch, length)
-        v = self._split_heads(self.v_proj(x), batch, length)
+        q_projected = self.q_proj(x)
+        q = self._split_heads(q_projected, batch, length)
+        k_projected = self.k_proj(x)
+        k = self._split_heads(k_projected, batch, length)
+        v_projected = self.v_proj(x)
+        v = self._split_heads(v_projected, batch, length)
         q = F.normalize(q.float(), dim=3)
         k = F.normalize(k.float(), dim=3)
         v = v.float()
@@ -33,13 +36,18 @@ class LinearAttention(TokenMixer):
             v_t = v[:, :, t:t+1, :]
 
             # 累加当前 key-value 外积，不计算预测误差或遗忘。
-            state = state + torch.matmul(v_t.transpose(2, 3), k_t)
-            output_t = torch.matmul(q_t, state.transpose(2, 3))
+            value_column = v_t.transpose(2, 3)
+            update = torch.matmul(value_column, k_t)
+            state = state + update
+            memory_for_reading = state.transpose(2, 3)
+            output_t = torch.matmul(q_t, memory_for_reading)
             outputs.append(output_t)
 
         output = torch.cat(outputs, dim=2)
-        output = output.transpose(1, 2).reshape(batch, length, dim)
-        output = self.out_proj(output.to(x.dtype))
+        output = output.transpose(1, 2)
+        output = output.reshape(batch, length, dim)
+        output = output.to(x.dtype)
+        output = self.out_proj(output)
         output = self.dropout(output)
 
         new_state = None

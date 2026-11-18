@@ -14,6 +14,7 @@ class RMSNorm(nn.Module):
         # 用 FP32 计算均方值和归一化，最终恢复输入精度。
         values = x.float()
         mean_square = values.square().mean(dim=-1, keepdim=True)
-        output = values * torch.rsqrt(mean_square + self.eps)
+        inverse_rms = torch.rsqrt(mean_square + self.eps)
+        output = values * inverse_rms
         output = output * self.weight
         return output.to(x.dtype)

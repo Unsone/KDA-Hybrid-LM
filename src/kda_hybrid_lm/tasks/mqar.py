@@ -3,14 +3,17 @@ from torch.nn import functional as F
 from torch.utils.data import Dataset
 
 class MQARDateset(Dataset):
-    def __init__(self, 
-        num_samples:int, 
-        context_length:int=32,
-        num_pairs:int=4,
-        num_queries:int=4,
-        key_vocab_size:int=32,
-        value_vocab_size:int=32,
-        seed:int=42
+    """保留当前 MQAR 草稿接口；generate_sample 尚未实现。"""
+
+    def __init__(
+        self,
+        num_samples: int,
+        context_length: int = 32,
+        num_pairs: int = 4,
+        num_queries: int = 4,
+        key_vocab_size: int = 32,
+        value_vocab_size: int = 32,
+        seed: int = 42
     ):
 
         self.num_samples = num_samples

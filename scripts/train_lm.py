@@ -52,20 +52,44 @@ def parser():
     return p
 
 
-def main():
-    p = parser()
-    args = p.parse_args()
+def _apply_defaults(args, p):
     smoke = args.mode == "smoke"
-    defaults = dict(steps=8 if smoke else 6104, search_steps=3 if smoke else 611,
-                    batch_size=2 if smoke else 8, accumulation=1 if smoke else 4,
-                    length=32 if smoke else 256, layers=2 if smoke else 6,
-                    hidden_dim=32 if smoke else 256, intermediate_dim=80 if smoke else 688,
-                    eval_every=4 if smoke else 100, eval_batches=2 if smoke else 32)
+    if smoke:
+        defaults = {
+            "steps": 8,
+            "search_steps": 3,
+            "batch_size": 2,
+            "accumulation": 1,
+            "length": 32,
+            "layers": 2,
+            "hidden_dim": 32,
+            "intermediate_dim": 80,
+            "eval_every": 4,
+            "eval_batches": 2,
+        }
+    else:
+        defaults = {
+            "steps": 6104,
+            "search_steps": 611,
+            "batch_size": 8,
+            "accumulation": 4,
+            "length": 256,
+            "layers": 6,
+            "hidden_dim": 256,
+            "intermediate_dim": 688,
+            "eval_every": 100,
+            "eval_batches": 32,
+        }
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
-    args.seeds = args.seeds or ([42, 43] if smoke else [42, 43, 44])
-    for key in (*defaults, "trace_every", "threads"):
+    if not args.seeds:
+        if smoke:
+            args.seeds = [42, 43]
+        else:
+            args.seeds = [42, 43, 44]
+    positive_options = list(defaults) + ["trace_every", "threads"]
+    for key in positive_options:
         if getattr(args, key) <= 0:
             p.error(f"--{key.replace('_', '-')} must be positive")
     if len(args.seeds) != len(set(args.seeds)) or args.tune_seed in args.seeds:
@@ -76,9 +100,10 @@ def main():
         p.error("Adam and scaled optimizers need equal numbers of LR candidates")
     if min(args.adam_lrs + args.scaled_lrs + [args.lr]) <= 0:
         p.error("Learning rates must be positive")
-    torch.set_num_threads(args.threads)
-    torch.use_deterministic_algorithms(True)
-    device = ("cuda" if torch.cuda.is_available() else "cpu") if args.device == "auto" else args.device
+    return smoke
+
+
+def _load_data(args, p, smoke):
     if smoke:
         text = b"Once upon a time, a little bird found a red apple. It shared the apple with a friend.\n"
         train = np.frombuffer(text * 200, dtype=np.uint8)
@@ -94,13 +119,20 @@ def main():
         vocab_size = metadata["vocab_size"]
     if min(len(train), len(valid), len(test)) <= args.length:
         p.error("Each data split must be longer than --length")
-    config = ModelConfig(vocab_size=vocab_size, hidden_dim=args.hidden_dim,
-                         intermediate_dim=args.intermediate_dim, num_heads=args.heads,
-                         layer_types=("softmax",) * args.layers)
-    output = args.output or ROOT / "outputs/metrics" / datetime.now(timezone.utc).strftime(f"{args.mode}-%Y%m%d-%H%M%S-%f")
+    return train, valid, test, vocab_size
+
+
+def _prepare_output(args, device, smoke):
+    output = args.output
+    if not output:
+        timestamp = datetime.now(timezone.utc).strftime(f"{args.mode}-%Y%m%d-%H%M%S-%f")
+        output = ROOT / "outputs/metrics" / timestamp
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    (output / "launch.json").write_text(json.dumps({**vars(args), "device": device}, default=str, indent=2), encoding="utf-8")
+    launch = vars(args).copy()
+    launch["device"] = device
+    launch_json = json.dumps(launch, default=str, indent=2)
+    (output / "launch.json").write_text(launch_json, encoding="utf-8")
     try:
         version = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
                                           text=True, stderr=subprocess.DEVNULL).strip()
@@ -119,6 +151,10 @@ def main():
     print(f"Device: {device}; output: {output}\n"
           f"Budget/run: {args.steps * args.batch_size * args.accumulation * args.length:,} target tokens\n"
           + ("SMOKE: synthetic byte-level data; pipeline check only." if smoke else "Real-data run; FP32, constant LR, no weight decay."), flush=True)
+    return output
+
+
+def _run_experiment(args, config, train, valid, device, output, smoke):
     common = dict(config=config, train=train, valid=valid, batch_size=args.batch_size,
                   accumulation=args.accumulation, length=args.length, eval_every=args.eval_every,
                   eval_batches=args.eval_batches, device=device, trace_every=args.trace_every)
@@ -131,9 +167,17 @@ def main():
     if args.mode == "train":
         results.append(run("train", args.optimizer, args.lr, args.seeds[0], args.steps))
     else:
-        grids = {kind: ([0.003 if kind == "adam" else 0.03] if smoke else
-                        args.adam_lrs if kind == "adam" else args.scaled_lrs)
-                 for kind in args.optimizers}
+        grids = {}
+        for kind in args.optimizers:
+            if smoke:
+                learning_rate = 0.03
+                if kind == "adam":
+                    learning_rate = 0.003
+                grids[kind] = [learning_rate]
+            elif kind == "adam":
+                grids[kind] = args.adam_lrs
+            else:
+                grids[kind] = args.scaled_lrs
         selected = {}
         searches = []
         for kind, lrs in grids.items():
@@ -156,6 +200,10 @@ def main():
         for seed in args.seeds:
             for kind, lr in selected.items():
                 results.append(run(f"repeat/{kind}-seed{seed}", kind, lr, seed, args.steps))
+    return results
+
+
+def _evaluate_final_runs(results, config, test, args, device):
     # 最终评估集只在选择 LR 且完成训练后使用。
     from kda_hybrid_lm.models import HybridLM
     for row in results:
@@ -163,6 +211,32 @@ def main():
         model = HybridLM(config).to(device)
         model.load_state_dict(saved["model"])
         row["test"] = evaluate(model, test, args.length, args.batch_size, args.eval_batches)
+
+
+def main():
+    p = parser()
+    args = p.parse_args()
+    smoke = _apply_defaults(args, p)
+
+    torch.set_num_threads(args.threads)
+    torch.use_deterministic_algorithms(True)
+    device = args.device
+    if device == "auto":
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+
+    train, valid, test, vocab_size = _load_data(args, p, smoke)
+    config = ModelConfig(
+        vocab_size=vocab_size,
+        hidden_dim=args.hidden_dim,
+        intermediate_dim=args.intermediate_dim,
+        num_heads=args.heads,
+        layer_types=("softmax",) * args.layers,
+    )
+    output = _prepare_output(args, device, smoke)
+    results = _run_experiment(args, config, train, valid, device, output, smoke)
+    _evaluate_final_runs(results, config, test, args, device)
     (output / "summary.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"Completed. Results: {output / 'summary.json'}", flush=True)
     if not args.no_plots:
