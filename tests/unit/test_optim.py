@@ -1,9 +1,12 @@
 import copy
+import math
 
+import pytest
 import torch
 from torch import nn
 
 from kda_hybrid_lm.train.optim import build_optimizer
+from kda_hybrid_lm.models import HybridLM, ModelConfig
 
 
 def test_scaled_adam_preserves_moments_and_scales_actual_update():
@@ -52,3 +55,32 @@ def test_scaled_weight_update_shuffle_and_zero_weights():
     for name, row in shuffled.items():
         assert row["scale"] == shuffled[row["source"]]["initial_rms"]
     assert shuffled["1.weight"]["scale"] == 0
+
+
+def test_theoretical_scales_preserve_initial_weights_rng_and_adam_moments():
+    torch.manual_seed(12)
+    model = HybridLM(ModelConfig(vocab_size=16, hidden_dim=8, intermediate_dim=24,
+                                 num_heads=2, layer_types=("softmax",), embedding_std=0.07))
+    original = copy.deepcopy(model)
+    rng = torch.get_rng_state().clone()
+    optimizer, mapping = build_optimizer(model, "adam_s_theory", 0.01)
+    baseline, _ = build_optimizer(original, "adam", 0.01)
+    torch.testing.assert_close(torch.get_rng_state(), rng)
+    assert mapping["embedding.weight"]["scale"] == 0.07
+    assert mapping["norm.weight"]["scale"] == 1
+    assert mapping["lm_head.weight"]["scale"] == pytest.approx(1 / math.sqrt(24))
+    assert mapping["layers.0.mlp.down_proj.weight"]["scale"] == pytest.approx(1 / math.sqrt(72))
+    assert mapping["embedding.weight"]["initial_rms"] != mapping["embedding.weight"]["scale"]
+    before = {n: p.detach().clone() for n, p in model.named_parameters()}
+    for (n, p), (_, q) in zip(model.named_parameters(), original.named_parameters()):
+        torch.testing.assert_close(p, q, rtol=0, atol=0)
+    for step in range(3):
+        for p, q in zip(model.parameters(), original.parameters()):
+            p.grad = torch.full_like(p, 0.3 * (step + 1))
+            q.grad = p.grad.clone()
+        optimizer.step()
+        baseline.step()
+    for (n, p), (_, q) in zip(model.named_parameters(), original.named_parameters()):
+        for key in ("exp_avg", "exp_avg_sq", "step"):
+            torch.testing.assert_close(optimizer.state[p][key], baseline.state[q][key])
+        torch.testing.assert_close(p - before[n], (q - before[n]) * mapping[n]["scale"])

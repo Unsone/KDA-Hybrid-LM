@@ -15,11 +15,12 @@ import numpy as np
 import torch
 
 from kda_hybrid_lm.models import ModelConfig
+from kda_hybrid_lm.train.optim import OPTIMIZERS
 from kda_hybrid_lm.train.trainer import evaluate, run_training
 
 
 def parser():
-    p = argparse.ArgumentParser(description="Adam / Adam-S / shuffled Transformer experiment")
+    p = argparse.ArgumentParser(description="Adam / Adam-S / shuffled / theoretical-RMS experiment")
     p.add_argument("--mode", choices=["smoke", "compare", "train"], default="smoke")
     p.add_argument("--data-dir", type=Path, default=ROOT / "data/processed/tinystories")
     p.add_argument("--output", type=Path)
@@ -42,7 +43,10 @@ def parser():
     p.add_argument("--eval-batches", type=int)
     p.add_argument("--trace-every", type=int, default=1)
     p.add_argument("--threads", type=int, default=4)
-    p.add_argument("--optimizer", choices=["adam", "adam_s", "shuffled"], default="adam")
+    p.add_argument("--optimizer", choices=OPTIMIZERS, default="adam")
+    p.add_argument("--optimizers", choices=OPTIMIZERS, nargs="+",
+                   default=["adam", "adam_s", "shuffled"],
+                   help="Arms to tune and repeat in compare/smoke; each gets the same search budget")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--no-plots", action="store_true")
     return p
@@ -66,6 +70,8 @@ def main():
             p.error(f"--{key.replace('_', '-')} must be positive")
     if len(args.seeds) != len(set(args.seeds)) or args.tune_seed in args.seeds:
         p.error("Use distinct repeat seeds excluding --tune-seed")
+    if len(args.optimizers) != len(set(args.optimizers)):
+        p.error("--optimizers must not contain duplicates")
     if not smoke and len(args.adam_lrs) != len(args.scaled_lrs):
         p.error("Adam and scaled optimizers need equal numbers of LR candidates")
     if min(args.adam_lrs + args.scaled_lrs + [args.lr]) <= 0:
@@ -96,7 +102,8 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     (output / "launch.json").write_text(json.dumps({**vars(args), "device": device}, default=str, indent=2), encoding="utf-8")
     try:
-        version = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        version = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                                          text=True, stderr=subprocess.DEVNULL).strip()
         diff = subprocess.check_output(["git", "-c", "core.safecrlf=false", "diff", "--binary"], cwd=ROOT, stderr=subprocess.DEVNULL)
         (output / "code-version.txt").write_text(version, encoding="utf-8")
         (output / "working-tree.patch").write_bytes(diff)
@@ -124,9 +131,9 @@ def main():
     if args.mode == "train":
         results.append(run("train", args.optimizer, args.lr, args.seeds[0], args.steps))
     else:
-        grids = {"adam": [0.003] if smoke else args.adam_lrs,
-                 "adam_s": [0.03] if smoke else args.scaled_lrs,
-                 "shuffled": [0.03] if smoke else args.scaled_lrs}
+        grids = {kind: ([0.003 if kind == "adam" else 0.03] if smoke else
+                        args.adam_lrs if kind == "adam" else args.scaled_lrs)
+                 for kind in args.optimizers}
         selected = {}
         searches = []
         for kind, lrs in grids.items():

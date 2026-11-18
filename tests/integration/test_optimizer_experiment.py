@@ -13,7 +13,7 @@ def test_paired_runs_record_same_initialization_data_and_real_updates(tmp_path):
     data = np.tile(np.arange(8, dtype=np.uint16), 20)
     results = []
     first_losses = []
-    for kind in ("adam", "adam_s", "shuffled"):
+    for kind in ("adam", "adam_s", "shuffled", "adam_s_theory"):
         path = tmp_path / kind
         results.append(run_training(
             config, data, data, path, kind=kind, lr=0.01, seed=13, shuffle_seed=29,

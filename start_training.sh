@@ -11,6 +11,10 @@ export PYTHONUNBUFFERED=1
 export MPLBACKEND=Agg
 
 case "${1:-}" in
+    theory)
+        shift
+        exec "$PY" "$ROOT/scripts/run_theory_control.py" "$@"
+        ;;
     prepare)
         shift
         exec "$PY" "$ROOT/scripts/prepare_data.py" "$@"

@@ -8,6 +8,8 @@
 
 ## 当前进度
 
+`AdamS_Lab` 分支新增了[理论 RMS 对照与 Adam / Adam-S 筛选绘图](docs/adam_s_theory_control.md)：可读取既有实验配置，只补跑 `adam_s_theory`，不需要重跑三组基线。以下历史进度记录保留。
+
 截至 **2026-11-17**，本机 CPU 环境执行 `pytest tests -q`：**39 项测试通过**。
 
 | 部分 | 当前状态 |
