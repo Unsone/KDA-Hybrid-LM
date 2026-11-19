@@ -7,7 +7,7 @@ from torch import nn
 from kda_hybrid_lm.modules.norm import RMSNorm
 
 
-OPTIMIZERS = ("adam", "adam_s", "shuffled", "adam_s_theory")
+OPTIMIZERS = ("adam", "adam_s", "shuffled", "adam_s_theory", "adam_s_matrix", "adam_norm")
 
 
 def theoretical_rms(model, name):
@@ -41,6 +41,18 @@ def build_optimizer(model, kind, lr, shuffle_seed=0):
     if kind == "adam_s_theory":
         for name, row in mapping.items():
             row.update(scale=theoretical_rms(model, name), scale_source="initialization_rule")
+    if kind in ("adam_s_matrix", "adam_norm"):
+        for name, row in mapping.items():
+            module_name, _, _ = name.rpartition(".")
+            is_norm = isinstance(model.get_submodule(module_name), RMSNorm)
+            if is_norm:
+                # 绝对 LR 固定，用 scale 表示以保持逐张量映射与日志一致。
+                norm_lr = 0.001 if kind == "adam_s_matrix" else 0.03
+                row["scale"] = norm_lr / lr
+            elif kind == "adam_norm":
+                row["scale"] = 1.0
+            row["parameter_role"] = "rmsnorm" if is_norm else "matrix"
+            row["effective_lr"] = lr * row["scale"]
     groups = [{"params": [p], "lr": lr * (mapping[n]["scale"] if n in mapping else 1.0),
                "name": n} for n, p in model.named_parameters()]
     return torch.optim.Adam(groups, lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=0), mapping

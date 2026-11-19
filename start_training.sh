@@ -11,6 +11,10 @@ export PYTHONUNBUFFERED=1
 export MPLBACKEND=Agg
 
 case "${1:-}" in
+    norm-ablation)
+        shift
+        exec "$PY" "$ROOT/scripts/run_norm_ablation.py" "$@"
+        ;;
     theory)
         shift
         exec "$PY" "$ROOT/scripts/run_theory_control.py" "$@"

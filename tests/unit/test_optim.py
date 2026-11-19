@@ -84,3 +84,39 @@ def test_theoretical_scales_preserve_initial_weights_rng_and_adam_moments():
         for key in ("exp_avg", "exp_avg_sq", "step"):
             torch.testing.assert_close(optimizer.state[p][key], baseline.state[q][key])
         torch.testing.assert_close(p - before[n], (q - before[n]) * mapping[n]["scale"])
+
+
+@pytest.mark.parametrize("kind,base_lr,norm_lr", [
+    ("adam_s_matrix",0.03,0.001), ("adam_norm",0.001,0.03),
+])
+def test_matrix_norm_interventions_change_only_intended_effective_lrs(kind,base_lr,norm_lr):
+    from kda_hybrid_lm.modules.norm import RMSNorm
+    torch.manual_seed(19)
+    model = HybridLM(ModelConfig(vocab_size=16,hidden_dim=8,intermediate_dim=24,
+                                 num_heads=2,layer_types=("softmax",)*2))
+    original = copy.deepcopy(model)
+    rng = torch.get_rng_state().clone()
+    opt,mapping = build_optimizer(model,kind,base_lr)
+    baseline,_ = build_optimizer(original,"adam",0.001)
+    torch.testing.assert_close(torch.get_rng_state(),rng)
+    before = {n:p.detach().clone() for n,p in model.named_parameters()}
+    for group in opt.param_groups:
+        name=group["name"]
+        module=model.get_submodule(name.rpartition(".")[0])
+        expected = norm_lr if isinstance(module,RMSNorm) else (
+            0.03*mapping[name]["initial_rms"] if kind=="adam_s_matrix" else 0.001)
+        assert group["lr"] == pytest.approx(expected)
+        assert mapping[name]["effective_lr"] == pytest.approx(expected)
+        torch.testing.assert_close(group["params"][0],before[name],rtol=0,atol=0)
+    for step in range(3):
+        for p,q in zip(model.parameters(),original.parameters()):
+            p.grad=torch.full_like(p,0.2*(step+1))
+            q.grad=p.grad.clone()
+        opt.step()
+        baseline.step()
+    for group,(_,q) in zip(opt.param_groups,original.named_parameters()):
+        p=group["params"][0]
+        for key in ("exp_avg","exp_avg_sq","step"):
+            torch.testing.assert_close(opt.state[p][key],baseline.state[q][key])
+        torch.testing.assert_close(p-before[group["name"]],
+                                   (q-before[group["name"]])*(group["lr"]/0.001))

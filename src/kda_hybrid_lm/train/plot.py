@@ -57,7 +57,8 @@ def plot_results(results, output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     colors = {"adam": "tab:blue", "adam_s": "tab:orange", "shuffled": "tab:green",
-              "adam_s_theory": "tab:purple"}
+              "adam_s_theory": "tab:purple", "adam_s_matrix": "tab:cyan",
+              "adam_norm": "tab:red"}
     traces = defaultdict(list)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
     for run in results:
